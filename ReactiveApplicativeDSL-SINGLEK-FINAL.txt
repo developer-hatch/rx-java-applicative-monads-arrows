@@ -1,0 +1,95 @@
+
+
+// ===== ApplicativeExtensions.kt =====
+package com.damianlattenero.dsl
+
+import arrow.Kind
+import arrow.typeclasses.Monad
+
+context(Monad<F>)
+infix fun <F, A, B> Kind<F, (A) -> B>.zipApWith(value: Kind<F, A>): Kind<F, B> =
+    flatMap { f -> value.map { a -> f(a) } }
+
+context(Monad<F>)
+infix fun <F, A, B> Kind<F, (A?) -> B>.zipApWithNullable(value: Kind<F, A>?): Kind<F, B> =
+    if (value == null) map { it(null) } else flatMap { f -> value.map { a -> f(a) } }
+
+context(Monad<F>)
+infix fun <F, A, B> Kind<F, (A) -> B>.flatApWith(value: Kind<F, A>): Kind<F, B> =
+    flatMap { f -> value.map { a -> f(a) } }
+
+context(Monad<F>)
+infix fun <F, A, B> Kind<F, (A?) -> B>.flatApWithNullable(value: Kind<F, A>?): Kind<F, B> =
+    if (value == null) map { it(null) } else flatMap { f -> value.map { a -> f(a) } }
+
+// ===== ExampleWithSingleK.kt =====
+package com.damianlattenero.examples
+
+import arrow.core.extensions.*
+import com.damianlattenero.dsl.*
+import com.damianlattenero.instances.MonadSingleK
+import com.damianlattenero.kinds.*
+import io.reactivex.rxjava3.core.Single
+import java.util.concurrent.TimeUnit
+
+data class User(
+    val id: Int,
+    val name: String,
+    val email: String?,
+    val phone: String,
+    val address: String?
+)
+
+fun curriedUser(): (Int) -> (String) -> (String?) -> (String) -> (String?) -> User =
+    { id -> { name -> { email -> { phone -> { address -> User(id, name, email, phone, address) } } } } }
+
+fun fetchId(): SingleK<Int> = SingleK(Single.just(1).doOnSubscribe { println("Fetching ID...") }.delay(200, TimeUnit.MILLISECONDS))
+fun fetchName(): SingleK<String> = SingleK(Single.just("Alice").doOnSubscribe { println("Fetching Name...") }.delay(200, TimeUnit.MILLISECONDS))
+fun fetchEmail(): SingleK<String?>? = SingleK(Single.just("alice@example.com").doOnSubscribe { println("Fetching Email...") }.delay(200, TimeUnit.MILLISECONDS))
+fun fetchPhone(): SingleK<String> = SingleK(Single.just("123456789").doOnSubscribe { println("Fetching Phone...") }.delay(200, TimeUnit.MILLISECONDS))
+fun fetchAddress(): SingleK<String?>? = null // Simulate nullable absence
+
+fun main() {
+    with(MonadSingleK) {
+        val result =
+            (::curriedUser).just()
+                .zipApWith(fetchId())
+                .zipApWith(fetchName())
+                .flatApWithNullable(fetchEmail())
+                .zipApWith(fetchPhone())
+                .flatApWithNullable(fetchAddress())
+
+        result.fix().value.subscribe { println("Final User: $it") }
+    }
+}
+
+// ===== MonadSingleK.kt =====
+package com.damianlattenero.instances
+
+import arrow.Kind
+import arrow.typeclasses.Monad
+import com.damianlattenero.kinds.*
+
+object MonadSingleK : Monad<ForSingleK> {
+    override fun <A> just(a: A): SingleKOf<A> = SingleK(Single.just(a))
+
+    override fun <A, B> Kind<ForSingleK, A>.flatMap(f: (A) -> Kind<ForSingleK, B>): SingleKOf<B> =
+        fix().value.flatMap { (f(it) as SingleK<B>).value }.let { SingleK(it) }
+
+    override fun <A, B> Kind<ForSingleK, A>.map(f: (A) -> B): SingleKOf<B> =
+        fix().value.map(f).let { SingleK(it) }
+}
+
+// ===== SingleK.kt =====
+package com.damianlattenero.kinds
+
+import arrow.Kind
+import io.reactivex.rxjava3.core.Single
+
+class ForSingleK private constructor()
+typealias SingleKOf<A> = Kind<ForSingleK, A>
+
+@Suppress("UNCHECKED_CAST", "NOTHING_TO_INLINE")
+inline fun <A> SingleKOf<A>.fix(): SingleK<A> = this as SingleK<A>
+
+data class SingleK<A>(val value: Single<A>) : SingleKOf<A>
