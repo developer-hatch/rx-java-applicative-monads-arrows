@@ -1,0 +1,121 @@
+
+
+// ===== ApplicativeExtensions.kt =====
+package com.damianlattenero.dsl
+
+import arrow.Kind
+import arrow.typeclasses.Monad
+
+context(Monad<F>)
+infix fun <F, A, B> Kind<F, (A) -> B>.zipApWith(value: Kind<F, A>): Kind<F, B> =
+    flatMap { f -> value.map { a -> f(a) } }
+
+context(Monad<F>)
+infix fun <F, A, B> Kind<F, (A?) -> B>.zipApWithNullable(value: Kind<F, A>?): Kind<F, B> =
+    if (value == null) map { it(null) } else flatMap { f -> value.map { a -> f(a) } }
+
+context(Monad<F>)
+infix fun <F, A, B> Kind<F, (A) -> B>.flatApWith(value: Kind<F, A>): Kind<F, B> =
+    flatMap { f -> value.map { a -> f(a) } }
+
+context(Monad<F>)
+infix fun <F, A, B> Kind<F, (A?) -> B>.flatApWithNullable(value: Kind<F, A>?): Kind<F, B> =
+    if (value == null) map { it(null) } else flatMap { f -> value.map { a -> f(a) } }
+
+// ===== LongExampleWithNullables.kt =====
+package com.damianlattenero.examples
+
+import arrow.Kind
+import com.damianlattenero.dsl.*
+import com.damianlattenero.instances.MonadSingle
+import com.damianlattenero.typeclasses.Monad
+import io.reactivex.rxjava3.core.Single
+
+data class MegaUser(
+    val name: String?,
+    val email: String?,
+    val phone: String?,
+    val age: Int?,
+    val address: String?,
+    val role: String?,
+    val metadata: String?,
+    val status: String?,
+    val note: String?,
+    val tag: String?
+)
+
+fun curriedMegaUser(): (String?) -> (String?) -> (String?) -> (Int?) -> (String?) -> (String?) -> (String?) -> (String?) -> (String?) -> (String?) -> MegaUser =
+    { name -> { email -> { phone -> { age -> { address -> { role -> { metadata -> { status -> { note -> { tag ->
+        MegaUser(name, email, phone, age, address, role, metadata, status, note, tag)
+    }}}}}}}}
+
+fun fetchNullableName(): Single<String?> = Single.just("Alice")
+fun fetchNullableEmail(): Single<String?> = Single.just(null)
+fun fetchNullablePhone(): Single<String?> = Single.just("123-456")
+fun fetchNullableAge(): Single<Int?> = Single.just(30)
+fun fetchNullableAddress(): Single<String?> = Single.just("Wonderland")
+fun fetchNullableRole(): Single<String?>? = null
+fun fetchNullableMetadata(): Single<String?>? = Single.just("meta")
+fun fetchNullableStatus(): Single<String?>? = Single.just("active")
+fun fetchNullableNote(): Single<String?>? = null
+fun fetchNullableTag(): Single<String?>? = Single.just("tag")
+
+fun main() {
+    with(MonadSingle) {
+        val result =
+            (::curriedMegaUser).just()
+                .zipApWith(fetchNullableName())
+                .zipApWith(fetchNullableEmail())
+                .zipApWith(fetchNullablePhone())
+                .flatApWith(fetchNullableAge())
+                .flatApWith(fetchNullableAddress())
+                .zipApWithNullable(fetchNullableRole())
+                .flatApWithNullable(fetchNullableMetadata())
+                .zipApWithNullable(fetchNullableStatus())
+                .flatApWithNullable(fetchNullableNote())
+                .zipApWithNullable(fetchNullableTag())
+
+        (result as Single<MegaUser>).subscribe { println("User: $it") }
+    }
+}
+
+// ===== MaybeT.kt =====
+package com.damianlattenero.transformers
+
+data class MaybeT<F, A>(val value: Kind<F, A?>)
+
+// ===== Monad.kt =====
+package com.damianlattenero.typeclasses
+
+import arrow.Kind
+
+interface Monad<F> {
+    fun <A> just(a: A): Kind<F, A>
+    fun <A, B> Kind<F, A>.flatMap(f: (A) -> Kind<F, B>): Kind<F, B>
+    fun <A, B> Kind<F, A>.map(f: (A) -> B): Kind<F, B>
+}
+
+// ===== MonadSingle.kt =====
+package com.damianlattenero.instances
+
+import arrow.Kind
+import com.damianlattenero.typeclasses.Monad
+import io.reactivex.rxjava3.core.Single
+import io.reactivex.rxjava3.functions.BiFunction
+
+object MonadSingle : Monad<ForSingle> {
+    override fun <A> just(a: A): Single<A> = Single.just(a)
+
+    override fun <A, B> Kind<ForSingle, A>.flatMap(f: (A) -> Kind<ForSingle, B>): Single<B> =
+        (this as Single<A>).flatMap { f(it) as Single<B> }
+
+    override fun <A, B> Kind<ForSingle, A>.map(f: (A) -> B): Single<B> =
+        (this as Single<A>).map(f)
+}
+
+typealias ForSingle = Single<*>
+
+// ===== SingleT.kt =====
+package com.damianlattenero.transformers
+
+data class SingleT<F, A>(val value: Kind<F, Single<A>>)
